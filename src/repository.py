@@ -2,7 +2,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from .domain import ConflictError, NotFoundError
+from .domain import ConflictError, NotFoundError, ValidationError
 
 
 def utcnow():
@@ -139,6 +139,88 @@ class SQLiteRepository:
         finally:
             connection.close()
         return self.get_entity(entity_id)
+
+    def admit_people(self, zone_id, count, gate_id, admitted_at, order_id):
+        """Atomically admit ``count`` people into a zone on behalf of an order.
+
+        The capacity check and the occupancy update happen inside one write
+        transaction, so two concurrent orders cannot both pass the check and
+        over-occupy the zone.  The ``order_id`` is recorded on the zone so a
+        retry of the same order is a no-op instead of occupying the same
+        people twice.
+
+        Returns ``(zone, applied)`` where ``applied`` is False when the order
+        had already been applied (idempotent retry).
+        """
+        if not gate_id:
+            raise ValidationError("gate_id is required for admission")
+        now = utcnow()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM entities WHERE id = ?", (zone_id,)
+            ).fetchone()
+            if not row:
+                raise NotFoundError("zone not found: " + zone_id)
+            zone = self._entity_from_row(row)
+            data = zone["data"]
+            transfers = data.get("diversion_transfers") or {}
+            if order_id in transfers:
+                connection.rollback()
+                return zone, False
+            if zone["status"] not in ("open", "limited"):
+                raise ConflictError(
+                    "zone %s is not accepting admission (status %s)"
+                    % (zone_id, zone["status"])
+                )
+            occupancy = int(data.get("current_occupancy", 0))
+            capacity = int(data.get("capacity", 0))
+            if occupancy + int(count) > capacity:
+                raise ConflictError(
+                    "zone remaining capacity conflict: %d + %d > %d"
+                    % (occupancy, count, capacity)
+                )
+            if zone["status"] == "limited":
+                limit = int(data.get("admit_limit", capacity))
+                if occupancy + int(count) > limit:
+                    raise ConflictError(
+                        "zone admission limit conflict: %d + %d > %d"
+                        % (occupancy, count, limit)
+                    )
+            gate_row = connection.execute(
+                "SELECT * FROM entities WHERE id = ?", (gate_id,)
+            ).fetchone()
+            if not gate_row:
+                raise ValidationError("gate does not exist")
+            gate = self._entity_from_row(gate_row)
+            if gate["status"] != "open":
+                raise ConflictError("entry gate is not open")
+            if zone_id not in (gate["data"].get("zone_ids") or []):
+                raise ValidationError("gate does not serve this zone")
+            data["current_occupancy"] = occupancy + int(count)
+            transfers[order_id] = {
+                "count": int(count),
+                "at": admitted_at,
+                "gate_id": gate_id,
+            }
+            data["diversion_transfers"] = transfers
+            data["last_admission_at"] = admitted_at
+            data["last_gate_id"] = gate_id
+            new_version = int(zone["version"]) + 1
+            payload = json.dumps(data, ensure_ascii=False, sort_keys=True)
+            connection.execute(
+                "UPDATE entities SET status = ?, version = ?, data = ?, updated_at = ? "
+                "WHERE id = ? AND version = ?",
+                (zone["status"], new_version, payload, now, zone_id, int(zone["version"])),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_entity(zone_id), True
 
     def append_audit(self, entity_id, actor_id, actor_role, action, from_status, to_status, detail):
         with self._connect() as connection:

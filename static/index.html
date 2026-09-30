@@ -3,31 +3,280 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>大型场馆人群安全与现场指挥</title>
+  <title>大型场馆人群安全与现场指挥 · 疏导命令</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
-    main { max-width: 860px; margin: auto; }
-    pre { background: #f3f4f6; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    button { padding: .5rem .8rem; cursor: pointer; }
+    :root {
+      --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0; --text: #1e293b;
+      --muted: #64748b; --primary: #2563eb; --success: #16a34a;
+      --danger: #dc2626; --warning: #d97706; --info: #0891b2;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+    main { max-width: 1180px; margin: auto; padding: 1.5rem; }
+    h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+    .subtitle { color: var(--muted); margin: 0 0 1.5rem; font-size: .9rem; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem; margin-bottom: 1.25rem; }
+    .card h2 { font-size: 1.05rem; margin: 0 0 1rem; display: flex; align-items: center; gap: .5rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .85rem; }
+    .field { display: flex; flex-direction: column; gap: .3rem; }
+    .field label { font-size: .8rem; color: var(--muted); font-weight: 600; }
+    .field input, .field select { padding: .5rem .6rem; border: 1px solid var(--border); border-radius: 6px; font-size: .9rem; background: #fff; }
+    .field select[multiple] { min-height: 70px; }
+    .field .hint { font-size: .72rem; color: var(--muted); }
+    button { padding: .5rem .9rem; border: none; border-radius: 6px; cursor: pointer; font-size: .85rem; font-weight: 600; }
+    button.primary { background: var(--primary); color: #fff; }
+    button.success { background: var(--success); color: #fff; }
+    button.danger { background: var(--danger); color: #fff; }
+    button.warning { background: var(--warning); color: #fff; }
+    button.ghost { background: #fff; color: var(--text); border: 1px solid var(--border); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 1rem; }
+    .badge { display: inline-block; padding: .15rem .55rem; border-radius: 999px; font-size: .72rem; font-weight: 700; }
+    .badge.draft { background: #e2e8f0; color: #475569; }
+    .badge.submitted, .badge.in_progress { background: #dbeafe; color: #1e40af; }
+    .badge.completed { background: #dcfce7; color: #166534; }
+    .badge.blocked { background: #fee2e2; color: #991b1b; }
+    .badge.invalidated { background: #fef3c7; color: #92400e; }
+    .badge.cancelled { background: #e5e7eb; color: #6b7280; }
+    .badge.pending { background: #f1f5f9; color: #64748b; }
+    .badge.done { background: #dcfce7; color: #166534; }
+    .badge.failed { background: #fee2e2; color: #991b1b; }
+    .badge.skipped { background: #e0f2fe; color: #075985; }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: .78rem; }
+    .order-head { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-bottom: .5rem; }
+    .order-id { font-family: ui-monospace, monospace; font-size: .8rem; color: var(--muted); }
+    .reason { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: .5rem .7rem; border-radius: 6px; font-size: .82rem; margin: .5rem 0; }
+    .reason.invalid { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+    .meta { display: flex; gap: 1.25rem; flex-wrap: wrap; font-size: .82rem; color: var(--muted); margin: .4rem 0; }
+    .meta b { color: var(--text); }
+    .task-row { display: flex; gap: .5rem; align-items: center; margin-bottom: .4rem; }
+    .task-row input { flex: 1; padding: .4rem .5rem; border: 1px solid var(--border); border-radius: 5px; font-size: .85rem; }
+    .empty { color: var(--muted); font-size: .85rem; padding: 1rem; text-align: center; }
+    .toast { position: fixed; top: 1rem; right: 1rem; padding: .7rem 1rem; border-radius: 8px; color: #fff; font-size: .85rem; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,.15); }
+    .toast.ok { background: var(--success); }
+    .toast.err { background: var(--danger); }
+    .mono { font-family: ui-monospace, monospace; font-size: .8rem; }
   </style>
 </head>
 <body>
 <main>
   <h1>大型场馆人群安全与现场指挥</h1>
-  <p>区域容量、入口通道、事件、现场任务和人员到位通过JSON接口管理。</p>
-  <p><button onclick="checkHealth()">检查服务状态</button></p>
-  <pre id="result">等待操作</pre>
-  <pre>GET  /health
-GET  /api/&lt;kind&gt;
-POST /api/&lt;kind&gt;
-POST /api/entities/&lt;id&gt;/actions
-GET  /api/audit</pre>
+  <p class="subtitle">突发拥挤时按事件冻结受影响区域、入场口和医疗点，提交转入人数、通道方向与救援任务；支持提交、重试、取消并看清每一步阻塞原因。</p>
+
+  <div class="card">
+    <h2>＋ 新建疏导命令</h2>
+    <div class="grid">
+      <div class="field"><label>场馆</label><select id="f-venue"></select></div>
+      <div class="field"><label>触发事件</label><select id="f-incident"></select></div>
+      <div class="field"><label>受影响区域（冻结）</label><select id="f-zones" multiple></select></div>
+      <div class="field"><label>入场口（冻结）</label><select id="f-gates" multiple></select></div>
+      <div class="field"><label>医疗点（冻结）</label><select id="f-medicals" multiple></select></div>
+      <div class="field"><label>安全区域（转入）</label><select id="f-target"></select></div>
+      <div class="field"><label>转入人数</label><input id="f-count" type="number" min="1" value="100"></div>
+      <div class="field"><label>转入通道</label><select id="f-transfer-gate"></select></div>
+      <div class="field">
+        <label>通道方向</label>
+        <select id="f-direction">
+          <option value="outbound">outbound 向外疏散</option>
+          <option value="inbound">inbound 向内转入</option>
+          <option value="bidirectional">bidirectional 双向</option>
+        </select>
+      </div>
+    </div>
+    <div class="field" style="margin-top:.85rem">
+      <label>救援任务（team_id / task_type）</label>
+      <div id="f-tasks"></div>
+      <button class="ghost" style="margin-top:.4rem" onclick="addTaskRow()">＋ 添加救援任务</button>
+    </div>
+    <div class="actions">
+      <button class="primary" onclick="submitOrder()">提交疏导命令</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>疏导命令列表 <button class="ghost" style="margin-left:auto" onclick="loadAll()">刷新</button></h2>
+    <div id="orders"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>资源状态</h2>
+    <div id="resources"><div class="empty">加载中…</div></div>
+  </div>
 </main>
+
 <script>
-async function checkHealth() {
-  const response = await fetch('/health');
-  document.getElementById('result').textContent = JSON.stringify(await response.json(), null, 2);
+const $ = (id) => document.getElementById(id);
+const H = { "X-User-Id": "commander-ui", "X-Role": "coordinator", "Content-Type": "application/json" };
+
+async function api(method, path, body) {
+  const opt = { method, headers: H };
+  if (body !== undefined) opt.body = JSON.stringify(body);
+  const res = await fetch(path, opt);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  if (!res.ok) {
+    const err = new Error((data && data.error) || ("HTTP " + res.status));
+    err.status = res.status; err.data = data;
+    throw err;
+  }
+  return data;
 }
+
+function toast(msg, ok) {
+  const t = document.createElement("div");
+  t.className = "toast " + (ok ? "ok" : "err");
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3200);
+}
+
+function opt(list, selected) {
+  return list.map((x) => {
+    const sel = selected && selected.includes ? selected.includes(x.id) : selected === x.id;
+    return `<option value="${x.id}" ${sel ? "selected" : ""}>${x.name || x.id} (${x.status})</option>`;
+  }).join("");
+}
+
+async function loadForm() {
+  const [venues, incidents, zones, gates, medicals] = await Promise.all([
+    api("GET", "/api/venue"),
+    api("GET", "/api/incident"),
+    api("GET", "/api/zone"),
+    api("GET", "/api/gate"),
+    api("GET", "/api/medical_point"),
+  ]);
+  $("f-venue").innerHTML = opt(venues.items);
+  $("f-incident").innerHTML = opt(incidents.items);
+  $("f-zones").innerHTML = opt(zones.items);
+  $("f-gates").innerHTML = opt(gates.items);
+  $("f-medicals").innerHTML = opt(medicals.items);
+  $("f-target").innerHTML = opt(zones.items);
+  $("f-transfer-gate").innerHTML = '<option value="">（自动选择开放通道）</option>' + opt(gates.items);
+}
+
+function addTaskRow() {
+  const row = document.createElement("div");
+  row.className = "task-row";
+  row.innerHTML = `<input placeholder="team_id，如 team-1" data-team><input placeholder="task_type，如 rescue" data-type><button class="danger" onclick="this.parentElement.remove()">删除</button>`;
+  $("f-tasks").appendChild(row);
+}
+
+function readMulti(id) {
+  return Array.from($(id).selectedOptions).map((o) => o.value);
+}
+
+async function submitOrder() {
+  const tasks = Array.from(document.querySelectorAll("#f-tasks .task-row")).map((r) => ({
+    team_id: r.querySelector("[data-team]").value.trim(),
+    task_type: r.querySelector("[data-type]").value.trim(),
+  })).filter((t) => t.team_id);
+  const body = {
+    venue_id: $("f-venue").value,
+    incident_id: $("f-incident").value,
+    zone_ids: readMulti("f-zones"),
+    gate_ids: readMulti("f-gates"),
+    medical_point_ids: readMulti("f-medicals"),
+    transfer_count: parseInt($("f-count").value, 10),
+    target_zone_id: $("f-target").value,
+    passage_direction: $("f-direction").value,
+    rescue_tasks: tasks,
+  };
+  if ($("f-transfer-gate").value) body.transfer_gate_id = $("f-transfer-gate").value;
+  try {
+    const created = await api("POST", "/api/diversion_order", body);
+    await api("POST", `/api/entities/${created.id}/actions`, { action: "submit", data: {} });
+    toast("疏导命令已提交", true);
+    loadAll();
+  } catch (e) {
+    toast("提交失败：" + e.message, false);
+  }
+}
+
+async function act(orderId, action, data) {
+  try {
+    await api("POST", `/api/entities/${orderId}/actions`, { action, data: data || {} });
+    toast("操作成功：" + action, true);
+    loadAll();
+  } catch (e) {
+    toast("操作失败：" + e.message, false);
+    loadAll();
+  }
+}
+
+function stepBadge(status) {
+  return `<span class="badge ${status}">${status}</span>`;
+}
+
+function renderOrder(o) {
+  const d = o.data;
+  const steps = (d.steps || []).map((s) => {
+    const err = s.error ? `<div class="reason">阻塞原因：${s.error}</div>` : "";
+    const res = s.result ? `<div class="meta">结果：<span class="mono">${JSON.stringify(s.result)}</span></div>` : "";
+    return `<tr><td class="mono">${s.key}</td><td>${stepBadge(s.status)}</td><td>${err}${res}</td></tr>`;
+  }).join("");
+  const reason = d.blocked_reason ? `<div class="reason">阻塞原因：${d.blocked_reason}${d.blocked_step ? "（步骤 " + d.blocked_step + "）" : ""}</div>` : "";
+  const invalid = d.invalidated_reason ? `<div class="reason invalid">命令已失效：${d.invalidated_reason}</div>` : "";
+  const cancel = d.cancel_reason ? `<div class="reason invalid">取消原因：${d.cancel_reason}</div>` : "";
+  const canSubmit = o.status === "draft";
+  const canRetry = o.status === "blocked" || o.status === "invalidated";
+  const canCancel = o.status === "draft" || o.status === "blocked" || o.status === "invalidated";
+  return `<div class="card" style="margin-bottom:.75rem">
+    <div class="order-head">
+      <span class="badge ${o.status}">${o.status}</span>
+      <span class="order-id">${o.id}</span>
+      <span class="mono" style="font-size:.75rem;color:var(--muted)">v${o.version}</span>
+    </div>
+    <div class="meta">
+      <span>转入人数 <b>${d.transfer_count}</b>（实际核销 <b>${d.transferred_count}</b>）</span>
+      <span>方向 <b>${d.passage_direction}</b></span>
+      <span>通道 <b class="mono">${d.transfer_gate_id || "自动"}</b></span>
+      <span>已核销 <b>${d.reconciled ? "是" : "否"}</b></span>
+      <span>核销差异 <b>${d.write_off || 0}</b></span>
+    </div>
+    ${reason}${invalid}${cancel}
+    <table><thead><tr><th>步骤</th><th>状态</th><th>详情</th></tr></thead><tbody>${steps}</tbody></table>
+    <div class="actions">
+      ${canSubmit ? `<button class="primary" onclick="act('${o.id}','submit')">提交</button>` : ""}
+      ${canRetry ? `<button class="warning" onclick="act('${o.id}','retry')">重试</button>` : ""}
+      ${canCancel ? `<button class="danger" onclick="act('${o.id}','cancel',{reason:'现场取消'})">取消</button>` : ""}
+      <button class="ghost" onclick="act('${o.id}','reconcile')">重新核销</button>
+    </div>
+  </div>`;
+}
+
+async function loadOrders() {
+  const el = $("orders");
+  try {
+    const data = await api("GET", "/api/diversion_order");
+    if (!data.items.length) { el.innerHTML = '<div class="empty">暂无疏导命令</div>'; return; }
+    el.innerHTML = data.items.map(renderOrder).join("");
+  } catch (e) { el.innerHTML = '<div class="empty">加载失败：' + e.message + "</div>"; }
+}
+
+async function loadResources() {
+  const el = $("resources");
+  try {
+    const [zones, gates, medicals] = await Promise.all([
+      api("GET", "/api/zone"), api("GET", "/api/gate"), api("GET", "/api/medical_point"),
+    ]);
+    const z = zones.items.map((x) => `<tr><td>${x.name}</td><td><span class="badge ${x.status}">${x.status}</span></td><td class="mono">${x.data.current_occupancy || 0}/${x.data.capacity}</td></tr>`).join("");
+    const g = gates.items.map((x) => `<tr><td>${x.name}</td><td><span class="badge ${x.status}">${x.status}</span></td><td class="mono">${(x.data.zone_ids||[]).length} 个区域</td></tr>`).join("");
+    const m = medicals.items.map((x) => `<tr><td>${x.name}</td><td><span class="badge ${x.status}">${x.status}</span></td><td class="mono">${x.data.patients || 0}/${x.data.capacity}</td></tr>`).join("");
+    el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem">
+      <div><b>区域</b><table><thead><tr><th>名称</th><th>状态</th><th>人数/容量</th></tr></thead><tbody>${z}</tbody></table></div>
+      <div><b>入场口</b><table><thead><tr><th>名称</th><th>状态</th><th>连接区域</th></tr></thead><tbody>${g}</tbody></table></div>
+      <div><b>医疗点</b><table><thead><tr><th>名称</th><th>状态</th><th>病人/容量</th></tr></thead><tbody>${m}</tbody></table></div>
+    </div>`;
+  } catch (e) { el.innerHTML = '<div class="empty">加载失败：' + e.message + "</div>"; }
+}
+
+async function loadAll() {
+  await Promise.all([loadOrders(), loadResources()]);
+}
+
+loadForm().then(loadAll);
 </script>
 </body>
 </html>
