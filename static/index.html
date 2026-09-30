@@ -3,31 +3,401 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>大型场馆人群安全与现场指挥</title>
+  <title>大型场馆疏导指挥台</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
-    main { max-width: 860px; margin: auto; }
-    pre { background: #f3f4f6; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    button { padding: .5rem .8rem; cursor: pointer; }
+    :root { --line: #e5e7eb; --bg: #f9fafb; --ink: #1f2937; --muted: #6b7280;
+            --red: #b91c1c; --amber: #b45309; --green: #166534; --blue: #1d4ed8; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+           margin: 0; color: var(--ink); background: var(--bg); }
+    main { max-width: 1080px; margin: auto; padding: 1.5rem; }
+    h1 { font-size: 1.35rem; margin: 0 0 .25rem; }
+    h2 { font-size: 1rem; margin: 0 0 .6rem; }
+    .muted { color: var(--muted); font-size: .85rem; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 1rem; }
+    label { display: block; font-size: .8rem; color: var(--muted); margin: .5rem 0 .15rem; }
+    input, select { width: 100%; padding: .45rem .55rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: .85rem; }
+    .row { display: flex; gap: .5rem; align-items: center; }
+    .row > * { flex: 1; }
+    button { padding: .5rem .9rem; border: 0; border-radius: 6px; background: var(--blue); color: #fff;
+             font-size: .85rem; cursor: pointer; }
+    button.secondary { background: #374151; }
+    button.ghost { background: #fff; color: var(--ink); border: 1px solid #d1d5db; }
+    button.danger { background: var(--red); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .toolbar { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }
+    table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+    th, td { text-align: left; padding: .35rem .4rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .pill { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .72rem; font-weight: 600; }
+    .s-executing { background: #dbeafe; color: var(--blue); }
+    .s-completed, .s-reconciled { background: #dcfce7; color: var(--green); }
+    .s-failed { background: #fee2e2; color: var(--red); }
+    .s-stale { background: #fef3c7; color: var(--amber); }
+    .s-cancelled { background: #e5e7eb; color: #374151; }
+    .s-open, .s-active, .s-assigned, .s-triaged, .s-dispatched { background: #dcfce7; color: var(--green); }
+    .s-frozen, .s-evacuating, .s-full { background: #fee2e2; color: var(--red); }
+    .s-closed, .s-cancelled_ok, .s-standby { background: #e5e7eb; color: #374151; }
+    .s-restricted, .s-limited, .s-enroute, .s-on_scene { background: #fef3c7; color: var(--amber); }
+    pre { background: #111827; color: #e5e7eb; padding: .75rem; border-radius: 8px; font-size: .75rem;
+          overflow-x: auto; max-height: 260px; }
+    .blocked { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; border-radius: 8px;
+               padding: .5rem .75rem; font-size: .8rem; margin-top: .5rem; }
+    .steps { font-size: .72rem; color: var(--muted); margin-top: .25rem; }
+    .ok-text { color: var(--green); } .bad-text { color: var(--red); }
+    @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
 <main>
-  <h1>大型场馆人群安全与现场指挥</h1>
-  <p>区域容量、入口通道、事件、现场任务和人员到位通过JSON接口管理。</p>
-  <p><button onclick="checkHealth()">检查服务状态</button></p>
-  <pre id="result">等待操作</pre>
-  <pre>GET  /health
-GET  /api/&lt;kind&gt;
-POST /api/&lt;kind&gt;
-POST /api/entities/&lt;id&gt;/actions
-GET  /api/audit</pre>
+  <h1>大型场馆疏导指挥台</h1>
+  <p class="muted">事件升级后立即冻结受影响区域、入场口与医疗点，提交转入人数、通道方向和救援任务；失败可续跑，旧命令随事件等级、区域容量或通道状态失效。</p>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>指挥员身份</label>
+        <select id="role">
+          <option value="coordinator">指挥员 coordinator</option>
+          <option value="supervisor">安全主管 supervisor</option>
+          <option value="operator">入场口操作员 operator</option>
+          <option value="viewer">观察员 viewer</option>
+        </select>
+      </div>
+      <div>
+        <label>账号</label>
+        <input id="user" value="commander-1">
+      </div>
+      <div style="flex:2">
+        <label>服务</label>
+        <div class="toolbar" style="margin:0">
+          <button class="ghost" onclick="health()">健康检查</button>
+          <button class="ghost" onclick="seedDemo()">生成演示场景</button>
+          <button class="ghost" onclick="loadAll()">刷新现场</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:1rem">
+    <div class="card">
+      <h2>提交疏导命令</h2>
+      <label>事件 incident</label>
+      <select id="f-incident"></select>
+      <label>受影响区域（冻结，可多选）</label>
+      <select id="f-zones" multiple size="3"></select>
+      <label>入场口（冻结并定向，可多选）</label>
+      <select id="f-gates" multiple size="3"></select>
+      <label>医疗点（冻结，可多选）</label>
+      <select id="f-medicals" multiple size="2"></select>
+      <div class="row">
+        <div>
+          <label>转入目标区域</label>
+          <select id="f-target"></select>
+        </div>
+        <div>
+          <label>转入人数</label>
+          <input id="f-count" type="number" value="30" min="1">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>通道方向</label>
+          <select id="f-direction">
+            <option value="exit">只出不进 exit</option>
+            <option value="bidirectional">双向 bidirectional</option>
+            <option value="entry">入场 entry</option>
+          </select>
+        </div>
+        <div>
+          <label>救援班组</label>
+          <input id="f-team" value="rescue-team-1">
+        </div>
+        <div>
+          <label>任务类型</label>
+          <input id="f-tasktype" value="evacuation">
+        </div>
+      </div>
+      <div class="toolbar">
+        <button onclick="submitCommand()">提交命令</button>
+        <span class="muted">命令提交与容量占额在同一事务完成，并发时只有一方成功</span>
+      </div>
+      <div id="submit-result"></div>
+    </div>
+
+    <div class="card">
+      <h2>现场状态</h2>
+      <div class="toolbar">
+        <button class="secondary" onclick="openGate()">打开入场口</button>
+        <button class="secondary" onclick="admitOne()">旧流程放行 1 人</button>
+        <button class="danger" onclick="escalateIncident()">事件升级</button>
+        <button class="ghost" onclick="resizeTarget()">目标区改容</button>
+        <button class="ghost" onclick="unfreezeGate()">外部恢复入场口</button>
+      </div>
+      <p class="muted">选中一条事件后，可用以上按钮制造“事件升级 / 容量变化 / 通道变化”，观察旧命令失效。</p>
+      <h2 style="margin-top:.8rem">区域</h2>
+      <table id="t-zones"><thead><tr><th>区域</th><th>状态</th><th>在场</th><th>预留</th><th>容量</th></tr></thead><tbody></tbody></table>
+      <h2 style="margin-top:.8rem">入场口 / 医疗点 / 事件</h2>
+      <table id="t-misc"><thead><tr><th>对象</th><th>类型</th><th>状态</th><th>方向/等级</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:1rem">
+    <h2>疏导命令</h2>
+    <table id="t-commands">
+      <thead><tr><th>命令</th><th>事件</th><th>状态</th><th>转入/核销</th><th>步骤</th><th>阻塞原因</th><th>操作</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="command-output" class="muted" style="margin-top:.5rem">尚无命令</div>
+  </div>
+
+  <div class="card" style="margin-top:1rem">
+    <h2>最近接口响应</h2>
+    <pre id="result">等待操作</pre>
+  </div>
 </main>
+
 <script>
-async function checkHealth() {
-  const response = await fetch('/health');
-  document.getElementById('result').textContent = JSON.stringify(await response.json(), null, 2);
+const state = { zones: [], gates: [], medicals: [], incidents: [], commands: [] };
+const $ = (id) => document.getElementById(id);
+
+async function api(method, path, body) {
+  const headers = { "Content-Type": "application/json",
+    "X-Role": $("role").value, "X-User-Id": $("user").value || "anonymous" };
+  const response = await fetch(path, { method, headers,
+    body: body ? JSON.stringify(body) : undefined });
+  const payload = await response.json().catch(() => ({}));
+  $("result").textContent = response.status + " " + method + " " + path + "\n" + JSON.stringify(payload, null, 2);
+  if (!response.ok) {
+    const error = new Error(payload.error || ("HTTP " + response.status));
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
 }
+
+function pill(status) {
+  const cls = ("s-" + status).replace(/[^a-z0-9_-]/g, "");
+  return `<span class="pill ${cls}">${status}</span>`;
+}
+
+function selected(id) {
+  return [...$(id).selectedOptions].map(o => o.value);
+}
+
+function fillSelect(id, items, labelFn, multiple) {
+  const current = multiple ? selected(id) : $(id).value;
+  $(id).innerHTML = items.map(i => `<option value="${i.id}">${labelFn(i)}</option>`).join("");
+  if (multiple) { [...$(id).options].forEach(o => { if (current.includes(o.value)) o.selected = true; }); }
+  else if (current && items.some(i => i.id === current)) $(id).value = current;
+}
+
+async function health() {
+  const r = await fetch("/health");
+  $("result").textContent = JSON.stringify(await r.json(), null, 2);
+}
+
+async function seedDemo() {
+  const venue = await api("POST", "/api/venues", { name: "中央体育馆", address: "1 Stadium Road" });
+  const src = await api("POST", "/api/zones",
+    { venue_id: venue.id, name: "北区看台", capacity: 100 });
+  const dst = await api("POST", "/api/zones",
+    { venue_id: venue.id, name: "南集散广场", capacity: 120 });
+  const gate = await api("POST", "/api/gates",
+    { venue_id: venue.id, name: "N1 入场口", zone_ids: [src.id] });
+  await api("POST", `/api/entities/${gate.id}/actions`,
+    { action: "open", data: { operator_id: $("user").value } });
+  for (const z of [src, dst]) {
+    await api("POST", `/api/entities/${z.id}/actions`, { action: "open", data: { checklist: "clear" } });
+  }
+  await api("POST", `/api/entities/${src.id}/actions`,
+    { action: "admit", data: { gate_id: gate.id, count: 60, admitted_at: new Date().toISOString() } });
+  await api("POST", "/api/medical_points",
+    { venue_id: venue.id, zone_id: src.id, capacity: 6, equipment_level: "advanced" });
+  await api("POST", "/api/incidents", {
+    venue_id: venue.id, zone_id: src.id, source_ref: "radio-" + Date.now(),
+    incident_type: "stampede", severity: "high", reported_at: new Date().toISOString(),
+  });
+  await loadAll();
+}
+
+async function loadAll() {
+  const [zones, gates, medicals, incidents, commands] = await Promise.all([
+    api("GET", "/api/zones"), api("GET", "/api/gates"),
+    api("GET", "/api/medical_points"), api("GET", "/api/incidents"), api("GET", "/api/commands"),
+  ]);
+  state.zones = zones.items; state.gates = gates.items; state.medicals = medicals.items;
+  state.incidents = incidents.items; state.commands = commands.items;
+  renderField();
+  renderCommands();
+}
+
+function incidentLabel(i) {
+  return `${i.data.incident_type} / ${i.data.severity} @ ${i.data.zone_id.slice(0, 8)} [${i.status}]`;
+}
+
+function renderField() {
+  fillSelect("f-incident", state.incidents, incidentLabel);
+  fillSelect("f-zones", state.zones, z => `${z.data.name} (余 ${z.data.capacity - (z.data.current_occupancy||0) - (z.data.reserved_occupancy||0)})`, true);
+  fillSelect("f-gates", state.gates, g => `${g.data.name} [${g.status}]`, true);
+  fillSelect("f-medicals", state.medicals, m => `医疗点 ${m.id.slice(0,8)} [${m.status}]`, true);
+  fillSelect("f-target", state.zones, z => `${z.data.name} 余量 ${z.data.capacity - (z.data.current_occupancy||0) - (z.data.reserved_occupancy||0)}`);
+  $("t-zones").querySelector("tbody").innerHTML = state.zones.map(z => `<tr>
+    <td>${z.data.name}</td><td>${pill(z.status)}</td>
+    <td>${z.data.current_occupancy || 0}</td><td>${z.data.reserved_occupancy || 0}</td>
+    <td>${z.data.capacity}</td></tr>`).join("");
+  const misc = [
+    ...state.gates.map(g => [g, "入场口", g.status, g.data.flow_direction || "-"]),
+    ...state.medicals.map(m => [m, "医疗点", m.status, m.data.equipment_level || "-"]),
+    ...state.incidents.map(i => [i, "事件", i.status, i.data.severity]),
+  ];
+  $("t-misc").querySelector("tbody").innerHTML = misc.map(([e, kind, status, extra]) =>
+    `<tr><td>${e.data.name || e.id.slice(0,8)}</td><td>${kind}</td><td>${pill(status)}</td><td>${extra}</td></tr>`
+  ).join("");
+}
+
+async function submitCommand() {
+  const payload = {
+    incident_id: $("f-incident").value,
+    venue_id: state.incidents.find(i => i.id === $("f-incident").value).data.venue_id,
+    zone_ids: selected("f-zones"),
+    gate_ids: selected("f-gates"),
+    medical_point_ids: selected("f-medicals"),
+    target_zone_id: $("f-target").value,
+    divert_count: parseInt($("f-count").value, 10),
+    flow_direction: $("f-direction").value,
+    team_id: $("f-team").value,
+    task_type: $("f-tasktype").value,
+  };
+  const box = $("submit-result");
+  try {
+    const command = await api("POST", "/api/commands", payload);
+    box.innerHTML = `<div class="ok-text">命令 ${command.id.slice(0,8)} 执行完成：${command.status}</div>`;
+  } catch (error) {
+    const p = error.payload || {};
+    if (p.command_id) {
+      box.innerHTML = `<div class="blocked">命令已建立但未完成（<b>${p.type}</b>）：${p.error}<br>
+        命令 ID：${p.command_id.slice(0,8)}，可在下方“重试 / 取消”。</div>`;
+    } else {
+      box.innerHTML = `<div class="blocked">提交被拒绝（<b>${p.type}</b>）：${p.error}</div>`;
+    }
+  }
+  await loadAll();
+}
+
+function renderCommands() {
+  const tbody = $("t-commands").querySelector("tbody");
+  if (!state.commands.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="muted">尚无命令</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = state.commands.map(c => {
+    const failure = c.data.failure;
+    const stale = (c.data.stale_reasons || []).map(r => r.message).join("；");
+    const block = c.status === "stale" ? stale : (failure ? `${failure.step}: ${failure.error}` : "");
+    const steps = c.data.steps.map(s => {
+      const cls = s.status === "done" ? "ok-text" : s.status === "failed" ? "bad-text" : "";
+      return `<span class="${cls}">${s.key.split(":")[0]}${s.status === "done" ? "✓" : s.status === "failed" ? "✗" : "…"}</span>`;
+    }).join(" ");
+    const canRetry = c.status === "failed" || c.status === "stale";
+    const canCancel = ["executing", "failed", "stale"].includes(c.status);
+    const canReconcile = c.status === "completed";
+    return `<tr>
+      <td>${c.id.slice(0,8)}</td>
+      <td>${c.data.incident_id.slice(0,8)}<br><span class="muted">${c.data.divert_count} 人 → ${c.data.target_zone_id.slice(0,8)} / ${c.data.flow_direction}</span></td>
+      <td>${pill(c.status)}<br><span class="muted">v${c.version}</span></td>
+      <td>转入 ${c.data.divert_count}<br><span class="muted">核销 ${c.data.actual_count == null ? "-" : c.data.actual_count}</span></td>
+      <td class="steps">${steps}</td>
+      <td>${block ? `<span class="bad-text">${block}</span>` : ""}</td>
+      <td class="row" style="display:flex;gap:.25rem;flex-wrap:wrap">
+        <button class="secondary" ${canRetry ? "" : "disabled"} onclick="retryCommand('${c.id}', ${c.version})">重试</button>
+        <button class="danger" ${canCancel ? "" : "disabled"} onclick="cancelCommand('${c.id}', ${c.version})">取消</button>
+        <button class="ghost" ${canReconcile ? "" : "disabled"} onclick="reconcileCommand('${c.id}')">核销</button>
+      </td></tr>`;
+  }).join("");
+}
+
+async function retryCommand(id, version) {
+  try {
+    await api("POST", `/api/entities/${id}/actions`, { action: "retry", expected_version: version });
+  } catch (e) { /* blocked reason rendered in output */ }
+  await loadAll();
+}
+
+async function cancelCommand(id, version) {
+  const reason = prompt("取消原因", "现场恢复正常");
+  if (reason === null) return;
+  await api("POST", `/api/entities/${id}/actions`,
+    { action: "cancel", expected_version: version, data: { reason } });
+  await loadAll();
+}
+
+async function reconcileCommand(id) {
+  const command = state.commands.find(c => c.id === id);
+  const input = prompt(`按实际核销转入人数（0-${command.data.divert_count}）`, String(command.data.divert_count));
+  if (input === null) return;
+  await api("POST", `/api/entities/${id}/actions`,
+    { action: "reconcile", data: { actual_count: parseInt(input, 10) } });
+  await loadAll();
+}
+
+function activeIncident() {
+  const id = $("f-incident").value;
+  return state.incidents.find(i => i.id === id);
+}
+
+async function escalateIncident() {
+  const incident = activeIncident();
+  if (!incident) return alert("请先选择事件");
+  const next = incident.data.severity === "low" ? "medium"
+    : incident.data.severity === "medium" ? "high" : "critical";
+  await api("POST", `/api/entities/${incident.id}/actions`,
+    { action: "escalate", data: { severity: next } });
+  await loadAll();
+}
+
+async function resizeTarget() {
+  const id = $("f-target").value;
+  const zone = state.zones.find(z => z.id === id);
+  const value = prompt("新的区域容量", String(Math.max(1, (zone.data.capacity || 100) - 20)));
+  if (value === null) return;
+  await api("POST", `/api/entities/${id}/actions`,
+    { action: "resize", data: { capacity: parseInt(value, 10), reason: "临时围挡调整" } });
+  await loadAll();
+}
+
+async function unfreezeGate() {
+  const ids = selected("f-gates");
+  for (const gateId of ids) {
+    await api("POST", `/api/entities/${gateId}/actions`,
+      { action: "unfreeze", data: { reason: "现场手动恢复通道" } });
+  }
+  await loadAll();
+}
+
+async function openGate() {
+  const ids = selected("f-gates");
+  for (const gateId of ids) {
+    await api("POST", `/api/entities/${gateId}/actions`,
+      { action: "open", data: { operator_id: $("user").value } });
+  }
+  await loadAll();
+}
+
+async function admitOne() {
+  const gateId = selected("f-gates")[0];
+  const gate = state.gates.find(g => g.id === gateId);
+  if (!gate) return alert("请先选择入场口");
+  const zoneId = (gate.data.zone_ids || [])[0];
+  try {
+    await api("POST", `/api/entities/${zoneId}/actions`,
+      { action: "admit", data: { gate_id: gateId, count: 1, admitted_at: new Date().toISOString() } });
+  } catch (e) { /* frozen zone/gate will be reported */ }
+  await loadAll();
+}
+
+loadAll().catch(() => {});
 </script>
 </body>
 </html>

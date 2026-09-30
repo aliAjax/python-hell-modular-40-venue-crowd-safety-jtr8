@@ -70,7 +70,14 @@ def create_handler(service, rules, static_dir):
                 status = 400
             else:
                 status = 500
-            self._send(status, {"error": str(exc), "type": type(exc).__name__})
+            payload = {"error": str(exc), "type": type(exc).__name__}
+            command_id = getattr(exc, "command_id", None)
+            if command_id:
+                payload["command_id"] = command_id
+            reasons = getattr(exc, "reasons", None)
+            if reasons:
+                payload["reasons"] = reasons
+            self._send(status, payload)
 
         def do_GET(self):
             try:
@@ -110,7 +117,7 @@ def create_handler(service, rules, static_dir):
                         raise ValidationError("action is required")
                     return self._send(
                         200,
-                        service.transition(
+                        service.perform_action(
                             actor,
                             parts[2],
                             action,
@@ -125,7 +132,7 @@ def create_handler(service, rules, static_dir):
                         raise ValidationError("action is required")
                     return self._send(
                         200,
-                        service.transition(
+                        service.perform_action(
                             actor,
                             parts[2],
                             action,
@@ -136,7 +143,7 @@ def create_handler(service, rules, static_dir):
                 if len(parts) == 5 and parts[0] == "api" and parts[4] == "actions":
                     return self._send(
                         200,
-                        service.transition(actor, parts[2], parts[3], self._body(), None),
+                        service.perform_action(actor, parts[2], parts[3], self._body(), None),
                     )
                 if len(parts) == 2 and parts[0] == "api":
                     body = self._body()

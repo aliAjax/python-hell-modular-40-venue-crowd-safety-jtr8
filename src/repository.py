@@ -110,6 +110,63 @@ class SQLiteRepository:
             if (entity["id"] == value if field == "id" else entity["data"].get(field) == value)
         ]
 
+    def insert_command_and_claim(
+        self, command_id, command_data, zone_id, divert_count, actor_id
+    ):
+        """Atomically create a diversion command and reserve zone capacity.
+
+        Raises ConflictError when another command is already active on the
+        incident or when the target zone lacks enough remaining capacity.
+        """
+        now = utcnow()
+        command_payload = json.dumps(command_data, ensure_ascii=False, sort_keys=True)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            incident_id = command_data["incident_id"]
+            active = connection.execute(
+                "SELECT id FROM entities WHERE kind = 'command' AND json_extract(data, '$.incident_id') = ? "
+                "AND status IN ('executing', 'failed', 'stale')",
+                (incident_id,),
+            ).fetchall()
+            zone_row = connection.execute(
+                "SELECT status, version, data FROM entities WHERE id = ?",
+                (zone_id,),
+            ).fetchone()
+            if not zone_row:
+                raise NotFoundError("entity not found: " + zone_id)
+            zone_data = json.loads(zone_row["data"])
+            capacity = int(zone_data.get("capacity", 0))
+            occupancy = int(zone_data.get("current_occupancy", 0))
+            reserved = int(zone_data.get("reserved_occupancy", 0))
+            remaining = capacity - occupancy - reserved
+            if remaining < int(divert_count):
+                raise ConflictError(
+                    "zone remaining capacity conflict: requested %s, remaining %s"
+                    % (divert_count, remaining)
+                )
+            if active:
+                raise ConflictError(
+                    "an active diversion command already exists for this incident: " + active[0]["id"]
+                )
+            zone_data["reserved_occupancy"] = reserved + int(divert_count)
+            connection.execute(
+                "UPDATE entities SET version = version + 1, data = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(zone_data, ensure_ascii=False, sort_keys=True), now, zone_id),
+            )
+            connection.execute(
+                "INSERT INTO entities(id, kind, status, version, data, created_by, created_at, updated_at) "
+                "VALUES (?, 'command', 'executing', 1, ?, ?, ?, ?)",
+                (command_id, command_payload, actor_id, now, now),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_entity(command_id), self.get_entity(zone_id)
+
     def update_entity(self, entity_id, expected_version, status, data):
         now = utcnow()
         payload = json.dumps(data, ensure_ascii=False, sort_keys=True)

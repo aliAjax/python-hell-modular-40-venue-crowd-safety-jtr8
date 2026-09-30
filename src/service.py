@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from .audit import AuditTrail
+from .commands import CommandManager
 from .domain import ConflictError, NotFoundError
 from .rules import RuleEngine
 
@@ -10,6 +11,7 @@ class DomainService:
         self.repository = repository
         self.rules = rules or RuleEngine()
         self.audit = AuditTrail(repository)
+        self.commands = CommandManager(self)
 
     def _lookup(self, kind, field, value):
         return self.repository.find_entities(self.rules.normalize_kind(kind), field, value)
@@ -19,6 +21,8 @@ class DomainService:
 
     def create(self, actor, kind, data, idempotency_key=None):
         kind = self.rules.normalize_kind(kind)
+        if kind == "command":
+            return self.commands.submit(actor, data, idempotency_key)
         payload = dict(data or {})
         if idempotency_key:
             existing = self.repository.get_idempotency(actor.user_id, idempotency_key)
@@ -59,6 +63,14 @@ class DomainService:
             {"patch": patch},
         )
         return updated
+
+    def perform_action(self, actor, entity_id, action, data=None, expected_version=None):
+        entity = self.repository.get_entity(entity_id)
+        if entity and entity["kind"] == "command":
+            return self.commands.action(
+                actor, entity_id, action, data or {}, expected_version
+            )
+        return self.transition(actor, entity_id, action, data, expected_version)
 
     def get(self, entity_id):
         entity = self.repository.get_entity(entity_id)

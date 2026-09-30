@@ -27,6 +27,14 @@ class InvalidTransition(DomainError):
     """The requested state transition is not valid."""
 
 
+class StaleCommandError(ConflictError):
+    """A diversion command was invalidated by an incident, capacity or channel change."""
+
+    def __init__(self, message, reasons=None):
+        super().__init__(message)
+        self.reasons = reasons or []
+
+
 class Role(str, Enum):
     viewer = "viewer"
     reporter = "reporter"

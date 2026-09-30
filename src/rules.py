@@ -1,5 +1,9 @@
 from .domain import ConflictError, InvalidTransition, PermissionDenied, ValidationError
 
+SAME_STATUS = "__same__"
+ACTIVE_COMMAND_STATUSES = ("executing", "failed", "stale")
+SEVERITY_SCORES = {"low": 10, "medium": 30, "high": 60, "critical": 90}
+
 
 def _find_one(lookup, kind, field, value):
     if lookup is None:
@@ -9,7 +13,6 @@ def _find_one(lookup, kind, field, value):
 
 
 def incident_priority(severity, incident_type):
-    severity_scores = {"low": 10, "medium": 30, "high": 60, "critical": 90}
     type_bonus = {
         "fire": 10,
         "stampede": 12,
@@ -18,13 +21,23 @@ def incident_priority(severity, incident_type):
         "security": 5,
         "structural": 10,
     }
-    if severity not in severity_scores:
+    if severity not in SEVERITY_SCORES:
         raise ValidationError("unsupported severity")
-    return min(100, severity_scores[severity] + type_bonus.get(incident_type, 0))
+    return min(100, SEVERITY_SCORES[severity] + type_bonus.get(incident_type, 0))
 
 
 def capacity_available(capacity, occupancy, requested):
     return int(occupancy) + int(requested) <= int(capacity)
+
+
+def effective_occupancy(zone):
+    return int(zone["data"].get("current_occupancy", 0)) + int(
+        zone["data"].get("reserved_occupancy", 0)
+    )
+
+
+def remaining_capacity(zone):
+    return int(zone["data"].get("capacity", 0)) - effective_occupancy(zone)
 
 
 def _validate_venue(actor, data, lookup):
@@ -52,7 +65,10 @@ def _validate_gate(actor, data, lookup):
         zone = _find_one(lookup, "zone", "id", zone_id)
         if not zone or zone["data"].get("venue_id") != venue["id"]:
             raise ValidationError("gate zones must belong to the venue")
-    return {}
+    flow_direction = data.get("flow_direction", "entry")
+    if flow_direction not in ("entry", "exit", "bidirectional"):
+        raise ValidationError("unsupported gate flow direction")
+    return {"flow_direction": flow_direction}
 
 
 def _validate_post(actor, data, lookup):
@@ -103,17 +119,23 @@ def _validate_zone_admit(actor, entity, data, lookup):
     if count <= 0:
         raise ValidationError("admission count must be positive")
     gate = _find_one(lookup, "gate", "id", data.get("gate_id"))
-    if not gate or gate["status"] != "open":
+    if not gate:
+        raise ValidationError("gate does not exist")
+    if gate["status"] != "open":
         raise ConflictError("entry gate is not open")
     if entity["id"] not in (gate["data"].get("zone_ids") or []):
         raise ValidationError("gate does not serve this zone")
-    occupancy = int(entity["data"].get("current_occupancy", 0))
     capacity = int(entity["data"].get("capacity", 0))
-    if not capacity_available(capacity, occupancy, count):
-        raise ConflictError("zone capacity would be exceeded")
+    occupancy = int(entity["data"].get("current_occupancy", 0))
+    reserved = int(entity["data"].get("reserved_occupancy", 0))
+    if occupancy + reserved + count > capacity:
+        raise ConflictError(
+            "zone remaining capacity conflict: requested %s, remaining %s"
+            % (count, capacity - occupancy - reserved)
+        )
     if entity["status"] == "limited":
         limit = int(entity["data"].get("admit_limit", capacity))
-        if occupancy + count > limit:
+        if occupancy + reserved + count > limit:
             raise ConflictError("zone admission limit would be exceeded")
     return {
         "current_occupancy": occupancy + count,
@@ -127,7 +149,10 @@ def _validate_gate_open(actor, entity, data, lookup):
         zone = _find_one(lookup, "zone", "id", zone_id)
         if zone and zone["status"] == "evacuating":
             raise ConflictError("gate cannot open while a connected zone is evacuating")
-    return {"opened_by": actor.user_id}
+    patch = {"opened_by": actor.user_id}
+    if not entity["data"].get("flow_direction"):
+        patch["flow_direction"] = "entry"
+    return patch
 
 
 def _validate_task_assign(actor, entity, data, lookup):
@@ -146,6 +171,78 @@ def _validate_correct(actor, entity, data, lookup):
     return {"correction_history": history}
 
 
+def _freeze_patch(actor, data, key):
+    if not data.get("reason"):
+        raise ValidationError("freeze reason is required")
+    patch = {key + "_by": actor.user_id, key + "_reason": data["reason"]}
+    if data.get("command_id"):
+        patch["frozen_command"] = data["command_id"]
+    return patch
+
+
+def _validate_zone_freeze(actor, entity, data, lookup):
+    return _freeze_patch(actor, data, "frozen")
+
+
+def _validate_zone_unfreeze(actor, entity, data, lookup):
+    return {"unfrozen_by": actor.user_id}
+
+
+def _validate_zone_resize(actor, entity, data, lookup):
+    try:
+        capacity = int(data.get("capacity"))
+    except (TypeError, ValueError):
+        raise ValidationError("capacity must be an integer")
+    if capacity <= 0:
+        raise ValidationError("zone capacity must be positive")
+    occupancy = effective_occupancy(entity)
+    if capacity < occupancy:
+        raise ConflictError(
+            "new capacity %s is below committed occupancy %s" % (capacity, occupancy)
+        )
+    if not data.get("reason"):
+        raise ValidationError("resize reason is required")
+    return {"capacity": capacity, "resized_by": actor.user_id}
+
+
+def _validate_gate_freeze(actor, entity, data, lookup):
+    return _freeze_patch(actor, data, "frozen")
+
+
+def _validate_gate_unfreeze(actor, entity, data, lookup):
+    return {"unfrozen_by": actor.user_id, "flow_direction": "entry"}
+
+
+def _validate_gate_direct(actor, entity, data, lookup):
+    direction = data.get("flow_direction")
+    if direction not in ("entry", "exit", "bidirectional"):
+        raise ValidationError("unsupported gate flow direction")
+    if entity["status"] != "frozen":
+        raise ConflictError("gate channel can only be directed while frozen")
+    return {"flow_direction": direction, "directed_by": actor.user_id}
+
+
+def _validate_medical_freeze(actor, entity, data, lookup):
+    return _freeze_patch(actor, data, "frozen")
+
+
+def _validate_medical_unfreeze(actor, entity, data, lookup):
+    return {"unfrozen_by": actor.user_id}
+
+
+def _validate_incident_escalate(actor, entity, data, lookup):
+    severity = data.get("severity")
+    if severity not in SEVERITY_SCORES:
+        raise ValidationError("unsupported severity")
+    if SEVERITY_SCORES[severity] <= SEVERITY_SCORES[entity["data"].get("severity")]:
+        raise ConflictError("new severity must be higher than current severity")
+    return {
+        "severity": severity,
+        "priority_score": incident_priority(severity, entity["data"].get("incident_type")),
+        "escalated_by": actor.user_id,
+    }
+
+
 class RuleEngine:
     ALIASES = {
         "venues": "venue",
@@ -155,6 +252,7 @@ class RuleEngine:
         "medical_points": "medical_point",
         "incidents": "incident",
         "tasks": "task",
+        "commands": "command",
     }
     INITIAL_STATUS = {
         "venue": "ready",
@@ -164,6 +262,7 @@ class RuleEngine:
         "medical_point": "standby",
         "incident": "reported",
         "task": "draft",
+        "command": "executing",
     }
     TRANSITIONS = {
         "venue": {
@@ -175,16 +274,25 @@ class RuleEngine:
             "open": (("closed",), "open"),
             "admit": (("open", "limited"), "open"),
             "restrict": (("open",), "limited"),
-            "evacuate": (("open", "limited"), "evacuating"),
+            "evacuate": (("open", "limited", "frozen"), "evacuating"),
             "recover": (("evacuating", "limited"), "open"),
             "close": (("open", "limited"), "closed"),
-            "correct": (("closed", "open", "limited", "evacuating"), "closed"),
+            "freeze": (("open", "limited"), "frozen"),
+            "unfreeze": (("frozen",), "open"),
+            "resize": (
+                ("closed", "open", "limited", "evacuating", "frozen"),
+                SAME_STATUS,
+            ),
+            "correct": (("closed", "open", "limited", "evacuating", "frozen"), "closed"),
         },
         "gate": {
             "open": (("closed",), "open"),
             "restrict": (("open",), "restricted"),
             "close": (("open", "restricted"), "closed"),
             "restore": (("restricted",), "open"),
+            "freeze": (("open", "restricted"), "frozen"),
+            "unfreeze": (("frozen",), "closed"),
+            "direct": (("frozen",), SAME_STATUS),
         },
         "post": {
             "activate": (("planned", "suspended"), "active"),
@@ -194,12 +302,18 @@ class RuleEngine:
             "activate": (("standby", "closed"), "active"),
             "mark_full": (("active",), "full"),
             "close": (("standby", "active", "full", "closed"), "closed"),
+            "freeze": (("standby", "active", "full"), "frozen"),
+            "unfreeze": (("frozen",), "active"),
         },
         "incident": {
             "triage": (("reported",), "triaged"),
             "dispatch": (("triaged",), "dispatched"),
             "resolve": (("dispatched", "reopened"), "resolved"),
             "reopen": (("resolved",), "reopened"),
+            "escalate": (
+                ("reported", "triaged", "dispatched", "reopened"),
+                SAME_STATUS,
+            ),
             "correct": (("reported", "triaged", "dispatched", "resolved", "reopened"), "triaged"),
         },
         "task": {
@@ -228,16 +342,22 @@ class RuleEngine:
         ("zone", "recover"): ("checklist",),
         ("zone", "close"): ("reason",),
         ("zone", "correct"): ("reason",),
+        ("zone", "freeze"): ("reason",),
+        ("zone", "resize"): ("capacity", "reason"),
         ("gate", "open"): ("operator_id",),
         ("gate", "restrict"): ("reason", "flow_limit"),
         ("gate", "close"): ("reason",),
+        ("gate", "freeze"): ("reason",),
+        ("gate", "direct"): ("flow_direction",),
         ("post", "suspend"): ("reason",),
         ("medical_point", "mark_full"): ("reason",),
         ("medical_point", "close"): ("reason",),
+        ("medical_point", "freeze"): ("reason",),
         ("incident", "triage"): ("priority",),
         ("incident", "dispatch"): ("commander_id",),
         ("incident", "resolve"): ("resolution",),
         ("incident", "reopen"): ("reason",),
+        ("incident", "escalate"): ("severity",),
         ("incident", "correct"): ("reason",),
         ("task", "assign"): ("assigned_at",),
         ("task", "acknowledge"): ("acknowledged_at",),
@@ -253,6 +373,7 @@ class RuleEngine:
         "medical_point": ("supervisor", "coordinator", "admin"),
         "incident": ("operator", "supervisor", "coordinator", "admin"),
         "task": ("supervisor", "coordinator", "admin"),
+        "command": ("supervisor", "coordinator", "admin"),
     }
     ROLE_ACTIONS = {
         "limit": ("coordinator", "supervisor", "admin"),
@@ -276,6 +397,11 @@ class RuleEngine:
         "arrive": ("operator", "supervisor", "admin"),
         "complete": ("operator", "supervisor", "admin"),
         "cancel": ("supervisor", "coordinator", "admin"),
+        "freeze": ("supervisor", "coordinator", "admin"),
+        "unfreeze": ("supervisor", "coordinator", "admin"),
+        "resize": ("coordinator", "supervisor", "admin"),
+        "direct": ("supervisor", "coordinator", "admin"),
+        "escalate": ("supervisor", "coordinator", "admin"),
     }
     CUSTOM_CREATE = {
         "venue": _validate_venue,
@@ -289,7 +415,16 @@ class RuleEngine:
     CUSTOM_TRANSITIONS = {
         ("zone", "admit"): _validate_zone_admit,
         ("zone", "correct"): _validate_correct,
+        ("zone", "freeze"): _validate_zone_freeze,
+        ("zone", "unfreeze"): _validate_zone_unfreeze,
+        ("zone", "resize"): _validate_zone_resize,
         ("gate", "open"): _validate_gate_open,
+        ("gate", "freeze"): _validate_gate_freeze,
+        ("gate", "unfreeze"): _validate_gate_unfreeze,
+        ("gate", "direct"): _validate_gate_direct,
+        ("medical_point", "freeze"): _validate_medical_freeze,
+        ("medical_point", "unfreeze"): _validate_medical_unfreeze,
+        ("incident", "escalate"): _validate_incident_escalate,
         ("incident", "correct"): _validate_correct,
         ("task", "assign"): _validate_task_assign,
     }
@@ -340,4 +475,6 @@ class RuleEngine:
         patch = dict(data)
         if extra:
             patch.update(extra)
+        if next_status == SAME_STATUS:
+            next_status = entity["status"]
         return next_status, patch
